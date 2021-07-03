@@ -108,81 +108,48 @@ def commit_edits(db, model, data, id_=None):
         db.session.rollback()
 
 
-def collection_handler(db, data):
+def collection_handler(db, data, schema):
     """
+    Make simpler by using schema._available_nests() to check if its a "collection"
     A function to handle creating new collections.
+
+    This function will assume that collections passed will be as id's
 
     db: database connection
     data: a python dictionary! Not list.
+    schema: the schema interface for the current model
 
-    NOTE: Right now it replaces the old collection with whatever is passed.
+    returns: data, model_collections
 
+        model_collections will be a dictionary where keys correspond to what they would appear as in model
     """
+    nests = schema._available_nests()
 
     names = []  # sample
-    col_names = []  # sample_collection
-    plural_names = []
     for ele in data:
-        if type(data[ele]) is list:  # collections will be lists
-            # check if it's plural
-            # TODO: need to check for analysis pluralization
-            if ele[-1] == "s" and ele != "analysis":
-                names.append(ele[:-1])
-                col_names.append(ele[:-1] + "_collection")
-                plural_names.append(ele)
-            elif "collection" in ele:
-                col_names.append(ele)
-                names.append(ele.replace("_collection", ""))
-            else:
-                names.append(ele)
-                col_names.append(ele + "_collection")
+        if ele in nests:
+            names.append(ele)
 
     ## maybe there are no collections
-    if len(col_names) == 0 or len(names) == 0:
+    if len(names) == 0:
         return data
 
-    # need to rename the key for plural keys
-    for name in plural_names:
-        data[name[:-1]] = data[name]
-        data.pop(name)
-    for i, name in enumerate(names):
-        data[col_names[i]] = data[name]
-        data.pop(name)
+    # for each name that is a collection
+    # get the nested models by id and add them to model_collections -> to be added to the model later
+    model_collections = {}
+    for name in names:
 
-    ## Create a loop ability to go over the len of both name lists
-    # for each name and collection name we perform the same actions.
-    for i, val in enumerate(names):
-        # if type(data[col_names[i]]) is list:
-        #     data = collection_handler(db, data[col_names[i]])
-        db_model = getattr(db.model, val)  ## the model for the collection.
+        db_model = getattr(db.model, name)  ## the model for the collection.
+        ids = data[name]
 
-        ## will become a new column in data that says model_collection
         collection = []
-        for ele in data[col_names[i]]:
-            if "id" not in ele:
-                ## The data probably doesn't exsist in the db
-                # get model that matches or create a new one.
-                # NOTE: **ele spreads everything, so theres a chance we could be duplicating data...
-                ele = location_check(ele, array=False)  ## this workds
-                material_check(db, ele, array=False)
-                new_model = db_model.get_or_create(
-                    **ele
-                )  ## doesn't set location for sample
-                if "location" in ele:
-                    new_model.location = ele["location"]
+        for id in ids:
+            instance = db.session.query(db_model).get(id)
+            collection.append(instance)
 
-                collection.append(new_model)
-            else:
-                # id is present in the object.
-                ele = location_check(ele, array=False)
-                material_check(db, ele, array=False)
-                existing_model = db_model.get_or_create(id=ele["id"])
-                if "location" in ele:
-                    existing_model.location = ele["location"]
+        collection_name = name + "_collection"
+        model_collections[collection_name] = collection
 
-                # for k in ele:
-                #     setattr(existing_model, k, ele[k])
-                collection.append(existing_model)
-        data[col_names[i]] = collection
+        data.pop(name)
 
-    return data
+    return data, model_collections
